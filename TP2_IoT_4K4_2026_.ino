@@ -3,12 +3,15 @@
 #include <DHT.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SH110X.h>
+#include <WebServer.h>
+
 // --- CONFIGURACIÓN WIFI Y THINGSPEAK ---
-const char* ssid = "Wokwi-GUEST"; // Cambiar por tu WiFi si usas hardware real
+const char* ssid = "Francisco's Iphone"; // Cambiar por tu WiFi si usas hardware real
 const char* password = "";        // Cambiar por tu password si usas hardware real
 unsigned long myChannelNumber = 3365192; // TU CHANNEL ID
 const char* myWriteAPIKey = "DYFY685KO34CWYFS"; // TU WRITE API KEY
 WiFiClient client;
+
 // --- CONFIGURACIÓN DE PINES Y SENSORES ---
 #define DHTPIN 33
 #define DHTTYPE DHT22
@@ -16,6 +19,7 @@ DHT dht(DHTPIN, DHTTYPE);
 #define PIN_PUSH 0 // Cambia al pin que uses para el pulsador
 #define I2C_ADDRESS 0x3c
 Adafruit_SH1106G display(128, 64, &Wire, -1);
+
 // --- VARIABLES DE ESTADO Y CONTROL ---
 const char* estados[] = {"No disponible", "En reparacion", "Habilitado", "Fuera de servicio"};
 int indiceEstado = 0;

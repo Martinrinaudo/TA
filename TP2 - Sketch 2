@@ -1,6 +1,7 @@
 #include <WiFi.h>
 #include <ThingSpeak.h>
 #include <ArduinoOTA.h>
+#include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
@@ -12,20 +13,21 @@ const char* ReadAPIKey = "YG5NS6WNVP60V4M6";
 WiFiClient client;
 
 // --- DISPLAY ---
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
 #define I2C_ADDRESS 0x3C
-Adafruit_SSD1306 display(128, 64, &Wire, -1);
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 // --- VARIABLES ---
-float valorAleatorio = 0;
-float temperatura = 0;
-float humedad = 0;
-unsigned long uptime = 0;
-String estado = "";
+float valorAleatorio = 0, temperatura = 0, humedad = 0;
+long uptime = 0;
+String estado = "Esperando datos...";
+
+int pantallaActual = 0;
 unsigned long ultimaLectura = 0;
 const unsigned long intervaloLectura = 16000;
-int pantallaActual = 0;
 unsigned long ultimoCambioPantalla = 0;
-const unsigned long intervaloPantalla = 3000;
+const unsigned long intervaloPantalla = 3000; // Rota cada 3 segundos
 
 void setup() {
   Serial.begin(115200);
@@ -35,6 +37,7 @@ void setup() {
     Serial.println("Error al iniciar OLED");
     while (1);
   }
+
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
@@ -44,39 +47,23 @@ void setup() {
 
   // --- WIFI ---
   WiFi.begin(ssid, password);
-  Serial.print("Conectando a WiFi...");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
   Serial.println("\nWiFi conectado!");
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
 
-  // --- OTA ---
-  ArduinoOTA.setHostname("esp32-lectura");
+  // --- CONFIGURACIÓN OTA ---
+  ArduinoOTA.setHostname("esp32-thingspeak");
   ArduinoOTA.onStart([]() {
-    Serial.println("Iniciando OTA...");
     display.clearDisplay();
     display.setCursor(0, 0);
     display.println("Actualizando OTA...");
     display.display();
   });
-  ArduinoOTA.onEnd([]() {
-    Serial.println("OTA finalizado!");
-  });
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error OTA: %u\n", error);
-  });
   ArduinoOTA.begin();
 
   ThingSpeak.begin(client);
-
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.println("WiFi conectado!");
-  display.println("Leyendo datos...");
-  display.display();
 }
 
 void mostrarPantalla() {
@@ -84,72 +71,62 @@ void mostrarPantalla() {
   display.setTextSize(1);
   display.setTextColor(WHITE);
 
-  switch (pantallaActual) {
-    case 0:
-      // Pantalla 1: Aleatorio + Temperatura + Humedad
-      display.setCursor(0, 0);
-      display.println("-- DATOS 1/2 --");
-      display.drawLine(0, 10, 127, 10, WHITE);
-      display.setCursor(0, 16);
-      display.printf("Aleatorio: %.0f\n", valorAleatorio);
-      display.setCursor(0, 32);
-      display.printf("Temp:  %.2f C\n", temperatura);
-      display.setCursor(0, 48);
-      display.printf("Hum:   %.2f %%\n", humedad);
-      break;
-
-    case 1:
-      // Pantalla 2: Uptime + Estado
-      display.setCursor(0, 0);
-      display.println("-- DATOS 2/2 --");
-      display.drawLine(0, 10, 127, 10, WHITE);
-      display.setCursor(0, 16);
-      display.printf("Uptime: %lu seg\n", uptime);
-      display.setCursor(0, 36);
-      display.println("Estado:");
-      display.setCursor(0, 48);
-      display.println(estado.c_str());
-      break;
+  // Divide la información en 3 pantallas para cumplir el requisito de legibilidad
+  if (pantallaActual == 0) {
+    display.setCursor(0, 0);
+    display.println("1/3: DATOS GENERALES");
+    display.drawLine(0, 10, 127, 10, WHITE);
+    display.setCursor(0, 20);
+    display.printf("Aleatorio: %.0f\n", valorAleatorio);
+    display.setCursor(0, 35);
+    display.printf("Uptime: %ld seg\n", uptime);
+  } else if (pantallaActual == 1) {
+    display.setCursor(0, 0);
+    display.println("2/3: AMBIENTE");
+    display.drawLine(0, 10, 127, 10, WHITE);
+    display.setCursor(0, 20);
+    display.printf("Temp: %.2f C\n", temperatura);
+    display.setCursor(0, 35);
+    display.printf("Hum: %.2f %%\n", humedad);
+  } else if (pantallaActual == 2) {
+    display.setCursor(0, 0);
+    display.println("3/3: ESTADO");
+    display.drawLine(0, 10, 127, 10, WHITE);
+    display.setCursor(0, 20);
+    display.println(estado);
   }
   display.display();
 }
 
 void loop() {
+  // Indispensable mantener OTA a la escucha
   ArduinoOTA.handle();
   unsigned long ahora = millis();
 
-  // Rotación de pantalla cada 3 segundos
+  // Rotación automática de las pantallas del display
   if (ahora - ultimoCambioPantalla >= intervaloPantalla) {
-    pantallaActual = (pantallaActual + 1) % 2;
-    ultimoCambioPantalla = ahora;
+    pantallaActual = (pantallaActual + 1) % 3;
     mostrarPantalla();
+    ultimoCambioPantalla = ahora;
   }
 
-  // Lectura de ThingSpeak cada 16 segundos
+  // Lectura optimizada en bloque desde ThingSpeak
   if (ahora - ultimaLectura >= intervaloLectura) {
-    Serial.println("\n--- Leyendo ThingSpeak ---");
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\nConsultando ThingSpeak...");
+      int httpCode = ThingSpeak.readMultipleFields(Channel, ReadAPIKey);
 
-    valorAleatorio = ThingSpeak.readFloatField(Channel, 1, ReadAPIKey);
-    temperatura    = ThingSpeak.readFloatField(Channel, 2, ReadAPIKey);
-    humedad        = ThingSpeak.readFloatField(Channel, 3, ReadAPIKey);
-    uptime         = (unsigned long)ThingSpeak.readFloatField(Channel, 4, ReadAPIKey);
-    estado         = ThingSpeak.readStatus(Channel, ReadAPIKey);
-
-    int httpCode = ThingSpeak.getLastReadStatus();
-
-    Serial.printf("Aleatorio: %.0f\n", valorAleatorio);
-    Serial.printf("Temp:      %.2f C\n", temperatura);
-    Serial.printf("Hum:       %.2f %%\n", humedad);
-    Serial.printf("Uptime:    %lu seg\n", uptime);
-    Serial.printf("Estado:    %s\n", estado.c_str());
-
-    if (httpCode == 200) {
-      Serial.println(">> Lectura correcta.");
-    } else {
-      Serial.printf(">> ERROR lectura. Codigo: %d\n", httpCode);
+      if (httpCode == 200) {
+        valorAleatorio = ThingSpeak.getFieldAsFloat(1);
+        temperatura = ThingSpeak.getFieldAsFloat(2);
+        humedad = ThingSpeak.getFieldAsFloat(3);
+        uptime = ThingSpeak.getFieldAsLong(4);
+        estado = ThingSpeak.getStatus();
+        Serial.println(">> Lectura exitosa. Pantalla actualizada.");
+      } else {
+        Serial.printf(">> Error de lectura HTTP. Codigo: %d\n", httpCode);
+      }
     }
-
-    mostrarPantalla();
     ultimaLectura = ahora;
   }
 }

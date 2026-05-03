@@ -4,152 +4,96 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-// --- CONFIGURACIÓN WIFI Y THINGSPEAK ---
+// --- CONFIGURACIÓN ---
 const char* ssid = "Wokwi-GUEST";
 const char* password = "";
 unsigned long Channel = 3365192;
 const char* ReadAPIKey = "YG5NS6WNVP60V4M6";
 WiFiClient client;
 
-// --- DISPLAY ---
+// --- HARDWARE ---
+#define PIN_PUSH 19 // Botón para cambiar de pantalla[cite: 7]
 #define I2C_ADDRESS 0x3C
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 
 // --- VARIABLES ---
-float valorAleatorio = 0;
-float temperatura = 0;
-float humedad = 0;
-unsigned long uptime = 0;
-String estado = "";
+float campo1, temp, hum;
+long uptime;
+String statusTS = "";
+int pantalla = 0;
 unsigned long ultimaLectura = 0;
-const unsigned long intervaloLectura = 16000;
-int pantallaActual = 0;
-unsigned long ultimoCambioPantalla = 0;
-const unsigned long intervaloPantalla = 3000;
+bool btnAnt = HIGH;
+
+void actualizarDisplay();
 
 void setup() {
   Serial.begin(115200);
   Wire.begin(21, 22);
+  pinMode(PIN_PUSH, INPUT_PULLUP);
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, I2C_ADDRESS)) {
-    Serial.println("Error al iniciar OLED");
-    while (1);
-  }
-  display.clearDisplay();
-  display.setTextSize(1);
+  if(!display.begin(SSD1306_SWITCHCAPVCC, I2C_ADDRESS)) while(1);
   display.setTextColor(WHITE);
-  display.setCursor(0, 0);
-  display.println("Conectando WiFi...");
-  display.display();
 
-  // --- WIFI ---
   WiFi.begin(ssid, password);
-  Serial.print("Conectando a WiFi...");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nWiFi conectado!");
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
+  while (WiFi.status() != WL_CONNECTED) delay(500);
 
-  // --- OTA ---
-  ArduinoOTA.setHostname("esp32-lectura");
+  // --- CONFIGURACIÓN OTA (Requisito punto 2) ---
+  ArduinoOTA.setHostname("ESP32-TP2-LECTOR");
   ArduinoOTA.onStart([]() {
-    Serial.println("Iniciando OTA...");
     display.clearDisplay();
-    display.setCursor(0, 0);
-    display.println("Actualizando OTA...");
+    display.setCursor(0, 20);
+    display.println("ACTUALIZANDO...");
     display.display();
-  });
-  ArduinoOTA.onEnd([]() {
-    Serial.println("OTA finalizado!");
-  });
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error OTA: %u\n", error);
   });
   ArduinoOTA.begin();
 
   ThingSpeak.begin(client);
-
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.println("WiFi conectado!");
-  display.println("Leyendo datos...");
-  display.display();
-}
-
-void mostrarPantalla() {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
-
-  switch (pantallaActual) {
-    case 0:
-      // Pantalla 1: Aleatorio + Temperatura + Humedad
-      display.setCursor(0, 0);
-      display.println("-- DATOS 1/2 --");
-      display.drawLine(0, 10, 127, 10, WHITE);
-      display.setCursor(0, 16);
-      display.printf("Aleatorio: %.0f\n", valorAleatorio);
-      display.setCursor(0, 32);
-      display.printf("Temp:  %.2f C\n", temperatura);
-      display.setCursor(0, 48);
-      display.printf("Hum:   %.2f %%\n", humedad);
-      break;
-
-    case 1:
-      // Pantalla 2: Uptime + Estado
-      display.setCursor(0, 0);
-      display.println("-- DATOS 2/2 --");
-      display.drawLine(0, 10, 127, 10, WHITE);
-      display.setCursor(0, 16);
-      display.printf("Uptime: %lu seg\n", uptime);
-      display.setCursor(0, 36);
-      display.println("Estado:");
-      display.setCursor(0, 48);
-      display.println(estado.c_str());
-      break;
-  }
-  display.display();
 }
 
 void loop() {
-  ArduinoOTA.handle();
+  ArduinoOTA.handle(); // Manejo de OTA[cite: 4]
   unsigned long ahora = millis();
 
-  // Rotación de pantalla cada 3 segundos
-  if (ahora - ultimoCambioPantalla >= intervaloPantalla) {
-    pantallaActual = (pantallaActual + 1) % 2;
-    ultimoCambioPantalla = ahora;
-    mostrarPantalla();
+  // 1. CAMBIO DE PANTALLA MANUAL (Pin 19)
+  bool btnAct = digitalRead(PIN_PUSH);
+  if (btnAct == LOW && btnAnt == HIGH) {
+    pantalla = (pantalla + 1) % 3;
+    actualizarDisplay();
+    delay(200);
   }
+  btnAnt = btnAct;
 
-  // Lectura de ThingSpeak cada 16 segundos
-  if (ahora - ultimaLectura >= intervaloLectura) {
-    Serial.println("\n--- Leyendo ThingSpeak ---");
-
-    valorAleatorio = ThingSpeak.readFloatField(Channel, 1, ReadAPIKey);
-    temperatura    = ThingSpeak.readFloatField(Channel, 2, ReadAPIKey);
-    humedad        = ThingSpeak.readFloatField(Channel, 3, ReadAPIKey);
-    uptime         = (unsigned long)ThingSpeak.readFloatField(Channel, 4, ReadAPIKey);
-    estado         = ThingSpeak.readStatus(Channel, ReadAPIKey);
-
-    int httpCode = ThingSpeak.getLastReadStatus();
-
-    Serial.printf("Aleatorio: %.0f\n", valorAleatorio);
-    Serial.printf("Temp:      %.2f C\n", temperatura);
-    Serial.printf("Hum:       %.2f %%\n", humedad);
-    Serial.printf("Uptime:    %lu seg\n", uptime);
-    Serial.printf("Estado:    %s\n", estado.c_str());
-
-    if (httpCode == 200) {
-      Serial.println(">> Lectura correcta.");
-    } else {
-      Serial.printf(">> ERROR lectura. Codigo: %d\n", httpCode);
+  // 2. LECTURA DE THINGSPEAK (Cada 16s)
+  if (ahora - ultimaLectura >= 16000) {
+    int code = ThingSpeak.readMultipleFields(Channel, ReadAPIKey); // Eficiente[cite: 6]
+    if (code == 200) {
+      campo1 = ThingSpeak.getFieldAsFloat(1);
+      temp   = ThingSpeak.getFieldAsFloat(2);
+      hum    = ThingSpeak.getFieldAsFloat(3);
+      uptime = ThingSpeak.getFieldAsLong(4);
+      statusTS = ThingSpeak.getStatus();
     }
-
-    mostrarPantalla();
+    actualizarDisplay();
     ultimaLectura = ahora;
   }
+}
+
+void actualizarDisplay() {
+  display.clearDisplay();
+  display.setCursor(0,0);
+  
+  if (pantalla == 0) {
+    display.println("PAG 1: GENERAL");
+    display.printf("\nValor: %.1f\n", campo1);
+    display.printf("Uptime: %ld s", uptime);
+  } else if (pantalla == 1) {
+    display.println("PAG 2: SENSORES");
+    display.printf("\nTemp: %.2f C\n", temp);
+    display.printf("Hum:  %.2f %%", hum);
+  } else {
+    display.println("PAG 3: ESTADO");
+    display.setCursor(0, 20);
+    display.println(statusTS);
+  }
+  display.display();
 }

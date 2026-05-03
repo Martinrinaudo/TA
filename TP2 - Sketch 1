@@ -1,112 +1,99 @@
 #include <WiFi.h>
 #include <ThingSpeak.h>
-#include <DHT.h>
+#include <ArduinoOTA.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-// --- CONFIGURACIÓN WIFI Y THINGSPEAK ---
+// --- CONFIGURACIÓN ---
 const char* ssid = "Wokwi-GUEST";
 const char* password = "";
 unsigned long Channel = 3365192;
-const char* APIKey = "DYFY685KO34CWYFS";
+const char* ReadAPIKey = "YG5NS6WNVP60V4M6";
 WiFiClient client;
 
-// --- PINES Y SENSORES ---
-#define DHTPIN 33
-#define DHTTYPE DHT22
-DHT dht(DHTPIN, DHTTYPE);
-#define PIN_PUSH 0
+// --- HARDWARE ---
+#define PIN_PUSH 19 // Botón para cambiar de pantalla[cite: 7]
 #define I2C_ADDRESS 0x3C
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 
-// --- ESTADO ---
-const char* estados[] = {"No disponible", "En reparacion", "Habilitado", "Fuera de servicio"};
-int indiceEstado = 0;
-unsigned long ultimaVezThingSpeak = 0;
-const unsigned long intervaloThingSpeak = 16000;
+// --- VARIABLES ---
+float campo1, temp, hum;
+long uptime;
+String statusTS = "";
+int pantalla = 0;
+unsigned long ultimaLectura = 0;
 bool btnAnt = HIGH;
+
+void actualizarDisplay();
 
 void setup() {
   Serial.begin(115200);
-  dht.begin();
   Wire.begin(21, 22);
+  pinMode(PIN_PUSH, INPUT_PULLUP);
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, I2C_ADDRESS)) {
-    Serial.println("Error al iniciar OLED");
-    while (1);
-  }
-  display.clearDisplay();
-  display.setTextSize(1);
+  if(!display.begin(SSD1306_SWITCHCAPVCC, I2C_ADDRESS)) while(1);
   display.setTextColor(WHITE);
 
-  Serial.print("Conectando a WiFi...");
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nWiFi conectado!");
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+
+  // --- CONFIGURACIÓN OTA (Requisito punto 2) ---
+  ArduinoOTA.setHostname("ESP32-TP2-LECTOR");
+  ArduinoOTA.onStart([]() {
+    display.clearDisplay();
+    display.setCursor(0, 20);
+    display.println("ACTUALIZANDO...");
+    display.display();
+  });
+  ArduinoOTA.begin();
+
   ThingSpeak.begin(client);
-  pinMode(PIN_PUSH, INPUT_PULLUP);
 }
 
 void loop() {
+  ArduinoOTA.handle(); // Manejo de OTA[cite: 4]
   unsigned long ahora = millis();
 
-  // 1. PULSADOR
+  // 1. CAMBIO DE PANTALLA MANUAL (Pin 19)
   bool btnAct = digitalRead(PIN_PUSH);
   if (btnAct == LOW && btnAnt == HIGH) {
-    delay(50);
-    indiceEstado = (indiceEstado + 1) % 4;
-    Serial.print("Estado cambiado a: ");
-    Serial.println(estados[indiceEstado]);
+    pantalla = (pantalla + 1) % 3;
+    actualizarDisplay();
+    delay(200);
   }
   btnAnt = btnAct;
 
-  // 2. DISPLAY
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.println("SISTEMA DE MONITOREO");
-  display.drawLine(0, 10, 127, 10, WHITE);
-  display.setCursor(0, 25);
-  display.print("Estado: ");
-  display.setCursor(0, 40);
-  display.println(estados[indiceEstado]);
-  display.display();
-
-  // 3. THINGSPEAK cada 16 segundos
-  if (ahora - ultimaVezThingSpeak >= intervaloThingSpeak) {
-    float t = dht.readTemperature();
-    float h = dht.readHumidity();
-    long valorAleatorio = random(100, 501);
-    unsigned long segundosUptime = ahora / 1000;
-
-    if (isnan(t) || isnan(h)) {
-      Serial.println("Error al leer DHT!");
-      t = 0.0; h = 0.0;
+  // 2. LECTURA DE THINGSPEAK (Cada 16s)
+  if (ahora - ultimaLectura >= 16000) {
+    int code = ThingSpeak.readMultipleFields(Channel, ReadAPIKey); // Eficiente[cite: 6]
+    if (code == 200) {
+      campo1 = ThingSpeak.getFieldAsFloat(1);
+      temp   = ThingSpeak.getFieldAsFloat(2);
+      hum    = ThingSpeak.getFieldAsFloat(3);
+      uptime = ThingSpeak.getFieldAsLong(4);
+      statusTS = ThingSpeak.getStatus();
     }
-
-    ThingSpeak.setField(1, (float)valorAleatorio);
-    ThingSpeak.setField(2, t);
-    ThingSpeak.setField(3, h);
-    ThingSpeak.setField(4, (long)segundosUptime);
-    ThingSpeak.setStatus(estados[indiceEstado]);
-
-    int respuesta = ThingSpeak.writeFields(Channel, APIKey);
-
-    Serial.println("\n--- Enviando a ThingSpeak ---");
-    Serial.printf("Aleatorio: %ld\n", valorAleatorio);
-    Serial.printf("Temp: %.2f C\n", t);
-    Serial.printf("Hum: %.2f %%\n", h);
-    Serial.printf("Uptime: %lu seg\n", segundosUptime);
-    Serial.printf("Estado: %s\n", estados[indiceEstado]);
-
-    if (respuesta == 200) {
-      Serial.println(">> Datos grabados correctamente.");
-    } else {
-      Serial.print(">> ERROR al grabar. Codigo: ");
-      Serial.println(respuesta);
-    }
-    ultimaVezThingSpeak = ahora;
+    actualizarDisplay();
+    ultimaLectura = ahora;
   }
+}
+
+void actualizarDisplay() {
+  display.clearDisplay();
+  display.setCursor(0,0);
+  
+  if (pantalla == 0) {
+    display.println("PAG 1: GENERAL");
+    display.printf("\nValor: %.1f\n", campo1);
+    display.printf("Uptime: %ld s", uptime);
+  } else if (pantalla == 1) {
+    display.println("PAG 2: SENSORES");
+    display.printf("\nTemp: %.2f C\n", temp);
+    display.printf("Hum:  %.2f %%", hum);
+  } else {
+    display.println("PAG 3: ESTADO");
+    display.setCursor(0, 20);
+    display.println(statusTS);
+  }
+  display.display();
 }

@@ -1,49 +1,70 @@
+
 #include <WiFi.h>
 #include <ThingSpeak.h>
 #include <DHT.h>
+#include <Wire.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_SH110X.h> // Cambiada la librería al modelo SH110X
+#include <Adafruit_SH110X.h>
 
-// --- CONFIGURACIÓN WIFI Y THINGSPEAK ---
-const char* ssid = "Moto Edge 40";
-const char* password = "timoteoyclara";
+// --- WIFI ---
+const char* ssid = "Wokwi-GUEST";
+const char* password = "";
+
+// --- THINGSPEAK ---
 unsigned long Channel = 3370344;
 const char* APIKey = "0F6V5EO1Q5K9WTZ6";
 WiFiClient client;
 
-// --- PINES (Mantengo los del primer código pero con el pulsador en 19 según tu placa) ---
+// --- DHT ---
 #define DHTPIN 33
 #define DHTTYPE DHT22
 DHT dht(DHTPIN, DHTTYPE);
-#define PIN_PUSH 19 // Cambiado a 19 según el pinout de tu cátedra
-#define I2C_ADDRESS 0x3C
 
-// --- DISPLAY SH1106G (Configuración exacta de tu código que sí anda) ---
+// --- PULSADOR ---
+#define PIN_PUSH 19
+bool btnAnt = HIGH;
+unsigned long btnUltimoTiempo = 0;
+const int DEBOUNCE_MS = 200;
+
+// --- DISPLAY SH1106 ---
+#define I2C_ADDRESS 0x3C
 const int SCREEN_WIDTH = 128;
 const int SCREEN_HEIGHT = 64;
 Adafruit_SH1106G display = Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
 
-// --- ESTADO ---
-const char* estados[] = {"No disponible", "En reparacion", "Habilitado", "Fuera de servicio"};
+// --- ESTADOS ---
+const char* estados[] = {
+  "No disponible",
+  "En reparacion",
+  "Habilitado",
+  "Fuera de servicio"
+};
 int indiceEstado = 0;
+
+// --- CONTROL TIEMPO ---
 unsigned long ultimaVezThingSpeak = 0;
 const unsigned long intervaloThingSpeak = 16000;
-bool btnAnt = HIGH;
-unsigned long btnUltimoTiempo = 0;
-const int DEBOUNCE_MS = 50;
 
 void setup() {
   Serial.begin(115200);
+
+  // Sensores
   dht.begin();
+
+  // I2C
   Wire.begin(21, 22);
 
-  // Inicialización específica para SH1106G
+  // Display
   display.begin(I2C_ADDRESS, true);
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SH110X_WHITE);
   display.display();
 
+  // Pulsador
+  pinMode(PIN_PUSH, INPUT_PULLUP);
+
+  // WiFi
   Serial.print("Conectando a WiFi...");
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -51,42 +72,49 @@ void setup() {
     Serial.print(".");
   }
   Serial.println("\nWiFi conectado!");
-  
+
+  // ThingSpeak
   ThingSpeak.begin(client);
-  pinMode(PIN_PUSH, INPUT_PULLUP);
 }
 
 void loop() {
   unsigned long ahora = millis();
 
-  // 1. PULSADOR CON DEBOUNCE (Pin 19)
+  // --- BOTON (CORREGIDO) ---
   bool btnAct = digitalRead(PIN_PUSH);
-  if (btnAct == LOW && btnAnt == HIGH && (ahora - btnUltimoTiempo > DEBOUNCE_MS)) {
+
+  // Detecta cuando SOLTAS el botón (evita saltos)
+  if (btnAct == HIGH && btnAnt == LOW && (ahora - btnUltimoTiempo > DEBOUNCE_MS)) {
     btnUltimoTiempo = ahora;
     indiceEstado = (indiceEstado + 1) % 4;
+
     Serial.print("Estado cambiado a: ");
     Serial.println(estados[indiceEstado]);
   }
+
   btnAnt = btnAct;
 
-  // 2. DISPLAY (Refresco constante para mostrar los segundos de Uptime)
+  // --- DISPLAY ---
   display.clearDisplay();
-  display.setTextColor(SH110X_WHITE);
+
   display.setCursor(0, 0);
-  display.println("SISTEMA DE MONITOREO");
+  display.println("SISTEMA MONITOREO");
   display.drawLine(0, 10, 127, 10, SH110X_WHITE);
-  
+
   display.setCursor(0, 25);
-  display.print("Estado: ");
+  display.print("Estado:");
+
   display.setCursor(0, 40);
   display.println(estados[indiceEstado]);
-  
+
   display.setCursor(0, 55);
   display.printf("Uptime: %lu s", ahora / 1000);
+
   display.display();
 
-  // 3. THINGSPEAK CADA 16 SEGUNDOS
+  // --- ENVIO A THINGSPEAK ---
   if (ahora - ultimaVezThingSpeak >= intervaloThingSpeak) {
+
     float t = dht.readTemperature();
     float h = dht.readHumidity();
     long valorAleatorio = random(100, 501);
@@ -94,26 +122,32 @@ void loop() {
 
     if (isnan(t) || isnan(h)) {
       Serial.println("Error al leer DHT!");
-      t = 0.0; h = 0.0;
+      t = 0.0;
+      h = 0.0;
     }
 
+    // Cargar campos
     ThingSpeak.setField(1, (float)valorAleatorio);
     ThingSpeak.setField(2, t);
     ThingSpeak.setField(3, h);
     ThingSpeak.setField(4, (long)segundosUptime);
     ThingSpeak.setStatus(estados[indiceEstado]);
 
-    int respuesta = ThingSpeak.writeFields(Channel, APIKey);
-
-    Serial.println("\n--- Reporte ThingSpeak ---");
-    Serial.printf("Temp: %.2f | Hum: %.2f\n", t, h);
+    Serial.println("\n--- ENVIO A THINGSPEAK ---");
+    Serial.printf("Valor random: %ld\n", valorAleatorio);
+    Serial.printf("Temperatura: %.2f °C\n", t);
+    Serial.printf("Humedad: %.2f %%\n", h);
+    Serial.printf("Uptime: %lu s\n", segundosUptime);
     Serial.printf("Estado: %s\n", estados[indiceEstado]);
 
+    int respuesta = ThingSpeak.writeFields(Channel, APIKey);
+
     if (respuesta == 200) {
-      Serial.println(">> Grabado correctamente.");
+      Serial.println(">> Datos enviados correctamente a ThingSpeak");
     } else {
-      Serial.printf(">> ERROR: %d\n", respuesta);
+      Serial.printf(">> Error al enviar datos. Codigo: %d\n", respuesta);
     }
+
     ultimaVezThingSpeak = ahora;
   }
 }

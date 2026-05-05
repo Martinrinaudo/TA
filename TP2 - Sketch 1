@@ -2,22 +2,26 @@
 #include <ThingSpeak.h>
 #include <DHT.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <Adafruit_SH110X.h> // Cambiada la librería al modelo SH110X
 
 // --- CONFIGURACIÓN WIFI Y THINGSPEAK ---
-const char* ssid = "Wokwi-GUEST";
-const char* password = "";
-unsigned long Channel = 3365192;
-const char* APIKey = "DYFY685KO34CWYFS";
+const char* ssid = "Moto Edge 40";
+const char* password = "timoteoyclara";
+unsigned long Channel = 3370344;
+const char* APIKey = "0F6V5EO1Q5K9WTZ6";
 WiFiClient client;
 
-// --- PINES Y SENSORES ---
+// --- PINES (Mantengo los del primer código pero con el pulsador en 19 según tu placa) ---
 #define DHTPIN 33
 #define DHTTYPE DHT22
 DHT dht(DHTPIN, DHTTYPE);
-#define PIN_PUSH 0
+#define PIN_PUSH 19 // Cambiado a 19 según el pinout de tu cátedra
 #define I2C_ADDRESS 0x3C
-Adafruit_SSD1306 display(128, 64, &Wire, -1);
+
+// --- DISPLAY SH1106G (Configuración exacta de tu código que sí anda) ---
+const int SCREEN_WIDTH = 128;
+const int SCREEN_HEIGHT = 64;
+Adafruit_SH1106G display = Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
 
 // --- ESTADO ---
 const char* estados[] = {"No disponible", "En reparacion", "Habilitado", "Fuera de servicio"};
@@ -25,19 +29,20 @@ int indiceEstado = 0;
 unsigned long ultimaVezThingSpeak = 0;
 const unsigned long intervaloThingSpeak = 16000;
 bool btnAnt = HIGH;
+unsigned long btnUltimoTiempo = 0;
+const int DEBOUNCE_MS = 50;
 
 void setup() {
   Serial.begin(115200);
   dht.begin();
   Wire.begin(21, 22);
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, I2C_ADDRESS)) {
-    Serial.println("Error al iniciar OLED");
-    while (1);
-  }
+  // Inicialización específica para SH1106G
+  display.begin(I2C_ADDRESS, true);
   display.clearDisplay();
   display.setTextSize(1);
-  display.setTextColor(WHITE);
+  display.setTextColor(SH110X_WHITE);
+  display.display();
 
   Serial.print("Conectando a WiFi...");
   WiFi.begin(ssid, password);
@@ -46,6 +51,7 @@ void setup() {
     Serial.print(".");
   }
   Serial.println("\nWiFi conectado!");
+  
   ThingSpeak.begin(client);
   pinMode(PIN_PUSH, INPUT_PULLUP);
 }
@@ -53,28 +59,33 @@ void setup() {
 void loop() {
   unsigned long ahora = millis();
 
-  // 1. PULSADOR
+  // 1. PULSADOR CON DEBOUNCE (Pin 19)
   bool btnAct = digitalRead(PIN_PUSH);
-  if (btnAct == LOW && btnAnt == HIGH) {
-    delay(50);
+  if (btnAct == LOW && btnAnt == HIGH && (ahora - btnUltimoTiempo > DEBOUNCE_MS)) {
+    btnUltimoTiempo = ahora;
     indiceEstado = (indiceEstado + 1) % 4;
     Serial.print("Estado cambiado a: ");
     Serial.println(estados[indiceEstado]);
   }
   btnAnt = btnAct;
 
-  // 2. DISPLAY
+  // 2. DISPLAY (Refresco constante para mostrar los segundos de Uptime)
   display.clearDisplay();
+  display.setTextColor(SH110X_WHITE);
   display.setCursor(0, 0);
   display.println("SISTEMA DE MONITOREO");
-  display.drawLine(0, 10, 127, 10, WHITE);
+  display.drawLine(0, 10, 127, 10, SH110X_WHITE);
+  
   display.setCursor(0, 25);
   display.print("Estado: ");
   display.setCursor(0, 40);
   display.println(estados[indiceEstado]);
+  
+  display.setCursor(0, 55);
+  display.printf("Uptime: %lu s", ahora / 1000);
   display.display();
 
-  // 3. THINGSPEAK cada 16 segundos
+  // 3. THINGSPEAK CADA 16 SEGUNDOS
   if (ahora - ultimaVezThingSpeak >= intervaloThingSpeak) {
     float t = dht.readTemperature();
     float h = dht.readHumidity();
@@ -94,18 +105,14 @@ void loop() {
 
     int respuesta = ThingSpeak.writeFields(Channel, APIKey);
 
-    Serial.println("\n--- Enviando a ThingSpeak ---");
-    Serial.printf("Aleatorio: %ld\n", valorAleatorio);
-    Serial.printf("Temp: %.2f C\n", t);
-    Serial.printf("Hum: %.2f %%\n", h);
-    Serial.printf("Uptime: %lu seg\n", segundosUptime);
+    Serial.println("\n--- Reporte ThingSpeak ---");
+    Serial.printf("Temp: %.2f | Hum: %.2f\n", t, h);
     Serial.printf("Estado: %s\n", estados[indiceEstado]);
 
     if (respuesta == 200) {
-      Serial.println(">> Datos grabados correctamente.");
+      Serial.println(">> Grabado correctamente.");
     } else {
-      Serial.print(">> ERROR al grabar. Codigo: ");
-      Serial.println(respuesta);
+      Serial.printf(">> ERROR: %d\n", respuesta);
     }
     ultimaVezThingSpeak = ahora;
   }

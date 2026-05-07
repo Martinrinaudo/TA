@@ -5,23 +5,26 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SH110X.h>
 
-// --- WIFI Y THINGSPEAK ---
-const char* ssid = "Wokwi-GUEST";
-const char* password = "";
-unsigned long Channel = 3370344;
-const char* ReadAPIKey = "0F6V5EO1Q5K9WTZ6";
+// --- WIFI (Igual al Sketch 1 para que el salto OTA sea fluido) ---
+const char* ssid     = "Caladux";
+const char* password = "carlos123";
+
+// --- THINGSPEAK ---
+unsigned long Channel = 3370344; // Tu Channel ID real
+const char* ReadAPIKey  = "8U8VUIPDHO68RIV9"; // IMPORTANTE: Usá la READ API Key aquí
 WiFiClient client;
 
 // --- DISPLAY SH1106 ---
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define I2C_ADDRESS 0x3C
-Adafruit_SH1106G display = Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
+// CORRECCIÓN: Agregado el -1 para que encienda la pantalla física
+Adafruit_SH1106G display = Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 // --- VARIABLES ---
 float valorAleatorio = 0, temperatura = 0, humedad = 0;
 long uptime = 0;
-String estado = "Cargando datos...";
+String estado = "Esperando...";
 
 int pantallaActual = 0;
 unsigned long ultimaLectura = 0;
@@ -31,7 +34,7 @@ const unsigned long intervaloPantalla = 3000;
 
 bool datosRecibidos = false;
 
-// --- FUNCION DISPLAY ---
+// ================================================================
 void mostrarPantalla() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -39,7 +42,8 @@ void mostrarPantalla() {
 
   if (!datosRecibidos) {
     display.setCursor(0, 20);
-    display.println("Esperando datos...");
+    display.println("Sincronizando");
+    display.println("con la nube...");
     display.display();
     return;
   }
@@ -48,123 +52,92 @@ void mostrarPantalla() {
     display.setCursor(0, 0);
     display.println("1/3: DATOS GENERALES");
     display.drawLine(0, 10, 127, 10, SH110X_WHITE);
-
-    display.setCursor(0, 20);
-    display.printf("Aleatorio: %.0f\n", valorAleatorio);
-
-    display.setCursor(0, 35);
-    display.printf("Uptime: %ld seg\n", uptime);
+    display.setCursor(0, 25);
+    display.printf("Aleatorio: %.0f", valorAleatorio);
+    display.setCursor(0, 45);
+    display.printf("Uptime: %ld s", uptime);
 
   } else if (pantallaActual == 1) {
     display.setCursor(0, 0);
     display.println("2/3: AMBIENTE");
     display.drawLine(0, 10, 127, 10, SH110X_WHITE);
-
-    display.setCursor(0, 20);
-    display.printf("Temp: %.2f C\n", temperatura);
-
-    display.setCursor(0, 35);
-    display.printf("Hum: %.2f %%\n", humedad);
+    display.setCursor(0, 25);
+    display.printf("Temp: %.2f C", temperatura);
+    display.setCursor(0, 45);
+    display.printf("Hum: %.2f %%", humedad);
 
   } else if (pantallaActual == 2) {
     display.setCursor(0, 0);
-    display.println("3/3: ESTADO");
+    display.println("3/3: ESTADO NUBE");
     display.drawLine(0, 10, 127, 10, SH110X_WHITE);
-
-    display.setCursor(0, 20);
+    display.setCursor(0, 30);
     display.println(estado);
   }
 
   display.display();
 }
 
+// ================================================================
 void setup() {
   Serial.begin(115200);
-
-  // I2C
   Wire.begin(21, 22);
 
-  // DISPLAY
+  // Inicialización Display
   if (!display.begin(I2C_ADDRESS, true)) {
     Serial.println("Error OLED");
-    while (1);
   }
 
   display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SH110X_WHITE);
   display.setCursor(0, 0);
-  display.println("Iniciando...");
+  display.println("SKETCH 2: LECTURA");
+  display.println("Conectando WiFi...");
   display.display();
 
   // WIFI
   WiFi.begin(ssid, password);
-  display.setCursor(0, 15);
-  display.println("Conectando WiFi...");
-  display.display();
-
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
 
-  Serial.println("\nWiFi conectado!");
-
-  // OTA
-  ArduinoOTA.setHostname("esp32-thingspeak");
-  ArduinoOTA.onStart([]() {
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.println("Actualizando OTA...");
-    display.display();
-  });
+  // OTA (Fundamental para volver al Sketch 1 después)
+  ArduinoOTA.setHostname("ESP32-Sketch2-Lectura");
   ArduinoOTA.begin();
 
   ThingSpeak.begin(client);
-
-  // 👉 IMPORTANTE: mostrar algo desde el inicio
   ultimoCambioPantalla = millis();
-  mostrarPantalla();
 }
 
+// ================================================================
 void loop() {
   ArduinoOTA.handle();
   unsigned long ahora = millis();
 
-  // --- CAMBIO DE PANTALLA ---
+  // --- ROTACIÓN DE PANTALLAS ---
   if (ahora - ultimoCambioPantalla >= intervaloPantalla) {
     pantallaActual = (pantallaActual + 1) % 3;
     mostrarPantalla();
     ultimoCambioPantalla = ahora;
   }
 
-  // --- LECTURA THINGSPEAK ---
+  // --- LECTURA DE THINGSPEAK ---
   if (ahora - ultimaLectura >= intervaloLectura) {
-
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\nLeyendo ThingSpeak...");
-
+      // Leemos todos los campos de una vez
       int httpCode = ThingSpeak.readMultipleFields(Channel, ReadAPIKey);
 
       if (httpCode == 200) {
         valorAleatorio = ThingSpeak.getFieldAsFloat(1);
-        temperatura = ThingSpeak.getFieldAsFloat(2);
-        humedad = ThingSpeak.getFieldAsFloat(3);
-        uptime = ThingSpeak.getFieldAsLong(4);
-        estado = ThingSpeak.getStatus();
-
+        temperatura    = ThingSpeak.getFieldAsFloat(2);
+        humedad        = ThingSpeak.getFieldAsFloat(3);
+        uptime         = ThingSpeak.getFieldAsLong(4);
+        estado         = ThingSpeak.getStatus();
         datosRecibidos = true;
-
-        Serial.println(">> Datos recibidos OK");
-
-        // 👉 REFRESCO INMEDIATO
-        mostrarPantalla();
-
+        Serial.println(">> Datos sincronizados");
       } else {
-        Serial.printf("Error HTTP: %d\n", httpCode);
+        Serial.printf("Error ThingSpeak: %d\n", httpCode);
       }
     }
-
     ultimaLectura = ahora;
   }
 }

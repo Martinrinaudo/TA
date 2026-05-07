@@ -166,7 +166,6 @@ void loop() {
   }
   btnAnt = btnAct;
 
-  // --- RECONEXIÓN WiFi no bloqueante ---
  // --- RECONEXIÓN WiFi no bloqueante ---
   if (WiFi.status() != WL_CONNECTED) {
     static unsigned long tUltimoRecon = 0;
@@ -180,7 +179,7 @@ void loop() {
     return;
   }
 
-  // --- ENVÍO THINGSPEAK cada 16s ---
+  // --- ENVÍO THINGSPEAK(cada 16s) ---
   if (ahora - ultimaVezThingSpeak >= intervaloThingSpeak) {
     ultimaVezThingSpeak = ahora;
 

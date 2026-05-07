@@ -10,15 +10,14 @@ const char* ssid     = "Caladux";
 const char* password = "carlos123";
 
 // --- THINGSPEAK ---
-unsigned long Channel = 3370344; // Tu Channel ID real
-const char* ReadAPIKey  = "8U8VUIPDHO68RIV9"; // IMPORTANTE: Usá la READ API Key aquí
+unsigned long Channel = 3370344; 
+const char* ReadAPIKey  = "8U8VUIPDHO68RIV9"; 
 WiFiClient client;
 
 // --- DISPLAY SH1106 ---
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define I2C_ADDRESS 0x3C
-// CORRECCIÓN: Agregado el -1 para que encienda la pantalla física
 Adafruit_SH1106G display = Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 // --- VARIABLES ---

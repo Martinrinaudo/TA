@@ -148,8 +148,10 @@ void setup() {
 
 // ================================================================
 void loop() {
-  ArduinoOTA.handle();
   unsigned long ahora = millis();
+
+  // --- OTA (Debe ejecutarse siempre) ---
+  ArduinoOTA.handle();
 
   // --- DISPLAY cada 500ms ---
   if (ahora - tUltimoDisplay >= 500) {
